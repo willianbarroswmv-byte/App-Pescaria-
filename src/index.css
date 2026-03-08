@@ -1,0 +1,33 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-zinc-950 text-zinc-100 antialiased selection:bg-emerald-500/30 selection:text-emerald-200;
+    overscroll-behavior-y: none;
+  }
+}
+
+@layer components {
+  .mobile-container {
+    @apply mx-auto min-h-screen max-w-md bg-zinc-900 shadow-2xl flex flex-col relative overflow-hidden;
+  }
+  
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .glass-panel {
+    @apply bg-black/40 backdrop-blur-md border border-white/10;
+  }
+
+  .stealth-overlay {
+    @apply fixed inset-0 bg-black z-[100] flex flex-col items-center justify-center transition-opacity duration-500;
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "FishCapture Pro",
+  "description": "App de pesca com gravação em loop, comando de voz, diário de capturas e análise por IA.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
