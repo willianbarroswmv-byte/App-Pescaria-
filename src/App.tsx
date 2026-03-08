@@ -42,7 +42,11 @@ import {
   Edit2,
   X,
   CheckCircle2,
-  Download
+  Download,
+  User,
+  RefreshCw,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet';
@@ -131,7 +135,7 @@ function MapEvents({ setPendingHotspot, setMapCenter, mapCenter }: {
 
 export default function App() {
   // Navigation & UI States
-  const [activeTab, setActiveTab] = useState<'home' | 'camera' | 'gallery' | 'map' | 'tools'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'camera' | 'gallery' | 'map' | 'tools' | 'settings'>('home');
   const [isLoopActive, setIsLoopActive] = useState(false);
   const [isStandardRecording, setIsStandardRecording] = useState(false);
   const [isStealthMode, setIsStealthMode] = useState(false);
@@ -158,6 +162,8 @@ export default function App() {
 
   // Camera States
   const [cameraQuality, setCameraQuality] = useState<'4K' | '1080p' | '720p'>('1080p');
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
+  const [isFullFrame, setIsFullFrame] = useState(false);
   const [mode, setMode] = useState<'normal' | 'timelapse' | 'slowmo'>('normal');
   const [showCatchModal, setShowCatchModal] = useState<string | null>(null);
   const [pendingHotspot, setPendingHotspot] = useState<{ lat: number; lng: number } | null>(null);
@@ -227,15 +233,27 @@ export default function App() {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
-      const constraints = {
-        video: {
-          facingMode: 'environment',
-          width: cameraQuality === '4K' ? 3840 : cameraQuality === '1080p' ? 1920 : 1280,
-          height: cameraQuality === '4K' ? 2160 : cameraQuality === '1080p' ? 1080 : 720,
-        },
-        audio: true
+      
+      const getStream = async (quality: '4K' | '1080p' | '720p') => {
+        const constraints = {
+          video: {
+            facingMode: facingMode,
+            width: { ideal: quality === '4K' ? 3840 : quality === '1080p' ? 1920 : 1280 },
+            height: { ideal: quality === '4K' ? 2160 : quality === '1080p' ? 1080 : 720 },
+          },
+          audio: true
+        };
+        return await navigator.mediaDevices.getUserMedia(constraints);
       };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      let stream;
+      try {
+        stream = await getStream(cameraQuality);
+      } catch (err) {
+        console.warn(`Failed to get camera at ${cameraQuality}, falling back to 720p`, err);
+        stream = await getStream('720p');
+      }
+
       if (videoRef.current) videoRef.current.srcObject = stream;
       streamRef.current = stream;
       
@@ -245,8 +263,9 @@ export default function App() {
       }
     } catch (err) {
       console.error("Camera error:", err);
+      alert("Erro ao acessar a câmera. Verifique as permissões nas configurações do seu navegador/celular.");
     }
-  }, [cameraQuality, isLoopActive]);
+  }, [cameraQuality, facingMode, isLoopActive]);
 
   // Load videos from IndexedDB
   useEffect(() => {
@@ -1197,7 +1216,7 @@ export default function App() {
 
         {activeTab === 'camera' && (
           <>
-            <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
+            <video ref={videoRef} autoPlay muted playsInline className={`w-full h-full ${isFullFrame ? 'object-contain bg-black' : 'object-cover'}`} />
             <div className="absolute inset-0 p-6 flex flex-col justify-between pointer-events-none">
               <div className="flex justify-between items-start pointer-events-auto">
                 <div className="flex flex-col gap-2">
@@ -1209,6 +1228,9 @@ export default function App() {
                         : (isStandardRecording ? 'GRAVANDO' : 'PRONTO')}
                     </span>
                   </div>
+                  <div className="glass-panel px-3 py-1 rounded-full text-[8px] font-bold text-zinc-400">
+                    {cameraQuality} • {facingMode === 'environment' ? 'TRASEIRA' : 'FRONTAL'}
+                  </div>
                   {isListening && (
                     <div className="glass-panel px-3 py-1.5 rounded-full flex items-center gap-2 text-emerald-500">
                       <Mic size={12} className="animate-pulse" />
@@ -1216,9 +1238,23 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <button onClick={() => setIsStealthMode(true)} className="glass-panel p-3 rounded-full text-zinc-300 pointer-events-auto">
-                  <ZapOff size={20} />
-                </button>
+                <div className="flex flex-col gap-3">
+                  <button 
+                    onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
+                    className="glass-panel p-3 rounded-full text-white active:scale-90 transition-transform"
+                  >
+                    <RefreshCw size={20} />
+                  </button>
+                  <button 
+                    onClick={() => setIsFullFrame(!isFullFrame)}
+                    className={`glass-panel p-3 rounded-full active:scale-90 transition-transform ${isFullFrame ? 'text-emerald-500' : 'text-white'}`}
+                  >
+                    <Scale size={20} />
+                  </button>
+                  <button onClick={() => setIsStealthMode(true)} className="glass-panel p-3 rounded-full text-zinc-300">
+                    <ZapOff size={20} />
+                  </button>
+                </div>
               </div>
 
               <div className="flex flex-col gap-6 pointer-events-auto">
@@ -1297,6 +1333,104 @@ export default function App() {
               </div>
             </div>
           </>
+        )}
+
+        {activeTab === 'settings' && (
+          <div className="h-full bg-zinc-950 p-6 space-y-8 overflow-y-auto">
+            <header className="flex justify-between items-center">
+              <div>
+                <h1 className="text-2xl font-display font-bold">Configurações</h1>
+                <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest">Ajustes do Sistema</p>
+              </div>
+            </header>
+
+            <section className="space-y-4">
+              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Qualidade de Gravação</h3>
+              <div className="grid grid-cols-3 gap-2">
+                {(['720p', '1080p', '4K'] as const).map((q) => (
+                  <button
+                    key={q}
+                    onClick={() => setCameraQuality(q)}
+                    className={`py-3 rounded-2xl border font-bold text-xs transition-all ${cameraQuality === q ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-zinc-900 border-white/5 text-zinc-500'}`}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-zinc-600 italic">Nota: 4K exige processamento intenso e pode não ser suportado em todos os dispositivos.</p>
+            </section>
+
+            <section className="space-y-4">
+              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Câmera Padrão</h3>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setFacingMode('environment')}
+                  className={`py-3 rounded-2xl border font-bold text-xs flex items-center justify-center gap-2 transition-all ${facingMode === 'environment' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-zinc-900 border-white/5 text-zinc-500'}`}
+                >
+                  <Camera size={16} /> Traseira
+                </button>
+                <button
+                  onClick={() => setFacingMode('user')}
+                  className={`py-3 rounded-2xl border font-bold text-xs flex items-center justify-center gap-2 transition-all ${facingMode === 'user' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-zinc-900 border-white/5 text-zinc-500'}`}
+                >
+                  <User size={16} /> Frontal
+                </button>
+              </div>
+            </section>
+
+            <section className="space-y-4">
+              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Permissões do Sistema</h3>
+              <div className="space-y-2">
+                {[
+                  { id: 'camera', label: 'Câmera', icon: Camera },
+                  { id: 'microphone', label: 'Microfone', icon: Mic },
+                  { id: 'geolocation', label: 'Localização (GPS)', icon: MapIcon },
+                ].map((p) => (
+                  <div key={p.id} className="bg-zinc-900 p-4 rounded-3xl border border-white/5 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-zinc-800 flex items-center justify-center text-zinc-400">
+                        <p.icon size={18} />
+                      </div>
+                      <span className="text-sm font-bold">{p.label}</span>
+                    </div>
+                    <button 
+                      onClick={async () => {
+                        try {
+                          if (p.id === 'camera' || p.id === 'microphone') {
+                            await navigator.mediaDevices.getUserMedia({ [p.id]: true });
+                          } else if (p.id === 'geolocation') {
+                            navigator.geolocation.getCurrentPosition(() => {});
+                          }
+                          alert(`${p.label} autorizada com sucesso!`);
+                        } catch (e) {
+                          alert(`Erro ao solicitar ${p.label}. Verifique as configurações do sistema.`);
+                        }
+                      }}
+                      className="text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-3 py-1.5 rounded-full"
+                    >
+                      VERIFICAR
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="space-y-4">
+              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Contato de Emergência</h3>
+              <input 
+                type="text" 
+                value={emergencyContact}
+                onChange={(e) => setEmergencyContact(e.target.value)}
+                placeholder="Nome ou Número"
+                className="w-full bg-zinc-900 border border-white/5 rounded-2xl p-4 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+              />
+            </section>
+
+            <div className="pt-8 pb-20 text-center">
+              <p className="text-[10px] text-zinc-700 uppercase tracking-widest font-bold">FishCapture Pro v2.1.0</p>
+              <p className="text-[10px] text-zinc-800 mt-1">Desenvolvido para pescadores profissionais</p>
+            </div>
+          </div>
         )}
 
         {activeTab === 'map' && (
@@ -1704,8 +1838,8 @@ export default function App() {
           { id: 'home', icon: LayoutDashboard, label: 'Home' },
           { id: 'camera', icon: Camera, label: 'Câmera' },
           { id: 'map', icon: MapIcon, label: 'Hotspots' },
-          { id: 'tools', icon: CheckSquare, label: 'Checklist' },
           { id: 'gallery', icon: FolderOpen, label: 'Diário' },
+          { id: 'settings', icon: Settings2, label: 'Config' },
         ].map((item) => (
           <button 
             key={item.id}
