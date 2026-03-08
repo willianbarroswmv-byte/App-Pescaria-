@@ -140,6 +140,45 @@ export default function App() {
   const [isStandardRecording, setIsStandardRecording] = useState(false);
   const [isStealthMode, setIsStealthMode] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const wakeLockRef = useRef<any>(null);
+
+  // Toast helper
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+    if (navigator.vibrate) {
+      if (type === 'error') navigator.vibrate([100, 50, 100]);
+      else navigator.vibrate(50);
+    }
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // Screen Wake Lock
+  const requestWakeLock = async () => {
+    if ('wakeLock' in navigator) {
+      try {
+        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+      } catch (err) {
+        console.error("Wake Lock error:", err);
+      }
+    }
+  };
+
+  const releaseWakeLock = () => {
+    if (wakeLockRef.current) {
+      wakeLockRef.current.release();
+      wakeLockRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    if (isLoopActive || isStandardRecording) {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+    return () => releaseWakeLock();
+  }, [isLoopActive, isStandardRecording]);
   
   // Data States
   const [recordings, setRecordings] = useState<Recording[]>([]);
@@ -234,24 +273,42 @@ export default function App() {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
       
-      const getStream = async (quality: '4K' | '1080p' | '720p') => {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Seu navegador não suporta acesso à câmera ou você não está em uma conexão segura (HTTPS).");
+      }
+      
+      const getStream = async (quality: '4K' | '1080p' | '720p', withAudio: boolean = true) => {
         const constraints = {
           video: {
-            facingMode: facingMode,
+            facingMode: { ideal: facingMode },
             width: { ideal: quality === '4K' ? 3840 : quality === '1080p' ? 1920 : 1280 },
             height: { ideal: quality === '4K' ? 2160 : quality === '1080p' ? 1080 : 720 },
           },
-          audio: true
+          audio: withAudio
         };
         return await navigator.mediaDevices.getUserMedia(constraints);
       };
 
       let stream;
       try {
+        // Try with requested quality and audio
         stream = await getStream(cameraQuality);
       } catch (err) {
-        console.warn(`Failed to get camera at ${cameraQuality}, falling back to 720p`, err);
-        stream = await getStream('720p');
+        console.warn(`Failed to get camera at ${cameraQuality} with audio, trying 720p...`, err);
+        try {
+          // Try 720p with audio
+          stream = await getStream('720p');
+        } catch (err2) {
+          console.warn(`Failed 720p with audio, trying without audio...`, err2);
+          try {
+            // Try 720p WITHOUT audio (maybe mic is blocked)
+            stream = await getStream('720p', false);
+          } catch (err3) {
+            console.warn(`Failed everything, trying basic video...`, err3);
+            // Final attempt: basic video only
+            stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          }
+        }
       }
 
       if (videoRef.current) videoRef.current.srcObject = stream;
@@ -263,7 +320,7 @@ export default function App() {
       }
     } catch (err) {
       console.error("Camera error:", err);
-      alert("Erro ao acessar a câmera. Verifique as permissões nas configurações do seu navegador/celular.");
+      showToast(err instanceof Error ? err.message : "Erro ao acessar a câmera.", 'error');
     }
   }, [cameraQuality, facingMode, isLoopActive]);
 
@@ -437,15 +494,11 @@ export default function App() {
         await saveVideo(id, blob);
       } catch (err) {
         console.error("Failed to save video to IndexedDB:", err);
-        const toast = document.getElementById('saving-toast');
-        if (toast) toast.remove();
-        alert("Erro ao salvar o vídeo. O armazenamento pode estar cheio.");
+        showToast("Erro ao salvar o vídeo. Armazenamento cheio?", 'error');
         return;
       }
       
       const finalizeSave = (pos?: GeolocationPosition) => {
-        const toast = document.getElementById('saving-toast');
-        if (toast) toast.remove();
 
         const newRecording: Recording = {
           id,
@@ -463,12 +516,7 @@ export default function App() {
         
         setRecordings(prev => [newRecording, ...prev]);
         setShowCatchModal(id);
-        
-        const successToast = document.createElement('div');
-        successToast.className = 'fixed top-12 left-1/2 -translate-x-1/2 bg-emerald-600 text-white px-6 py-3 rounded-full font-bold shadow-xl z-[300] animate-bounce flex items-center gap-2';
-        successToast.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Gravação Salva!';
-        document.body.appendChild(successToast);
-        setTimeout(() => successToast.remove(), 3000);
+        showToast("Gravação salva com sucesso!", 'success');
       };
 
       navigator.geolocation.getCurrentPosition(
@@ -504,12 +552,8 @@ export default function App() {
 
   const handleSaveReplay = async () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      // Immediate feedback
-      const savingToast = document.createElement('div');
-      savingToast.id = 'saving-toast';
-      savingToast.className = 'fixed top-12 left-1/2 -translate-x-1/2 bg-zinc-800 text-white px-6 py-3 rounded-full font-bold shadow-xl z-[300] flex items-center gap-3';
-      savingToast.innerHTML = '<div class="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div> Processando Vídeo...';
-      document.body.appendChild(savingToast);
+      showToast("Processando vídeo da captura...", 'info');
+      if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
 
       // Stopping the recorder triggers the onstop event which handles the actual saving
       shouldSaveRef.current = true;
@@ -759,7 +803,29 @@ export default function App() {
   }, [activeTab]);
 
   return (
-    <div className="mobile-container font-sans bg-zinc-950 text-zinc-100">
+    <div className="mobile-container font-sans bg-zinc-950 text-zinc-100 safe-area-top">
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            className="fixed bottom-24 left-4 right-4 z-[200] pointer-events-none flex justify-center"
+          >
+            <div className={`px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 glass-panel ${
+              toast.type === 'error' ? 'border-red-500/50 text-red-400' : 
+              toast.type === 'success' ? 'border-emerald-500/50 text-emerald-400' : 
+              'text-white'
+            }`}>
+              {toast.type === 'error' && <AlertTriangle size={18} />}
+              {toast.type === 'success' && <CheckCircle2 size={18} />}
+              <span className="text-sm font-bold">{toast.message}</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Stealth Mode Overlay */}
       <AnimatePresence>
         {isStealthMode && (
@@ -1120,9 +1186,12 @@ export default function App() {
                 </h1>
                 <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest">Assistente Inteligente</p>
               </div>
-              <div className="w-10 h-10 rounded-2xl bg-zinc-900 border border-white/5 flex items-center justify-center">
+              <button 
+                onClick={() => setActiveTab('settings')}
+                className="w-10 h-10 rounded-2xl bg-zinc-900 border border-white/5 flex items-center justify-center active:scale-95 transition-transform"
+              >
                 <Settings2 size={20} className="text-zinc-400" />
-              </div>
+              </button>
             </header>
 
             {/* Quick Actions Bento Grid */}
@@ -1396,14 +1465,16 @@ export default function App() {
                     <button 
                       onClick={async () => {
                         try {
-                          if (p.id === 'camera' || p.id === 'microphone') {
-                            await navigator.mediaDevices.getUserMedia({ [p.id]: true });
+                          if (p.id === 'camera') {
+                            await navigator.mediaDevices.getUserMedia({ video: true });
+                          } else if (p.id === 'microphone') {
+                            await navigator.mediaDevices.getUserMedia({ audio: true });
                           } else if (p.id === 'geolocation') {
                             navigator.geolocation.getCurrentPosition(() => {});
                           }
-                          alert(`${p.label} autorizada com sucesso!`);
+                          showToast(`${p.label} autorizada com sucesso!`, 'success');
                         } catch (e) {
-                          alert(`Erro ao solicitar ${p.label}. Verifique as configurações do sistema.`);
+                          showToast(`Erro ao solicitar ${p.label}.`, 'error');
                         }
                       }}
                       className="text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-3 py-1.5 rounded-full"
